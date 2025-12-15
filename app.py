@@ -4,7 +4,7 @@ import folium
 from streamlit_folium import st_folium
 import ast
 
-# ページ設定
+# ページ設定 (必ず一番最初に書く)
 st.set_page_config(layout="wide", page_title="交差点修正ツール (Upload版)")
 
 def main():
@@ -20,10 +20,6 @@ def main():
         return
 
     # --- 2. データのロードと初期化 ---
-    # セッションステート（メモリ）にデータがない、または別のファイルがアップロードされた場合にロード
-    # file_uploaderには `file_id` がないので、名前などで簡易判定するか、単純に毎回読み込む設計にします
-    
-    # データ読み込み関数
     @st.cache_data
     def load_data(file):
         df = pd.read_csv(file)
@@ -34,11 +30,11 @@ def main():
             )
         return df
 
-    # セッションステートの初期化（まだ読み込んでいない場合のみ）
+    # まだデータを読み込んでいない場合、ロードする
     if 'df' not in st.session_state:
         st.session_state.df = load_data(uploaded_file)
     
-    # リセットボタン（新しいファイルを読み直したい時など）
+    # 別のファイルがアップロードされた場合のリセットボタン
     if st.sidebar.button("データをリセット/再読み込み"):
         st.session_state.df = load_data(uploaded_file)
         st.rerun()
@@ -106,21 +102,23 @@ def main():
             center_lat = target_lm['lat']
             center_lon = target_lm['lon']
 
-        m = folium.Map(location=[center_lat, center_lon], zoom_start=18)
+        m = folium.Map(location=[center_lat, center_lon], zoom_start=19)
 
-        # マーカー配置
+        # マーカーA: 店舗（青）
         folium.Marker(
             [row['lat'], row['lng']], 
             popup="店舗", 
             icon=folium.Icon(color="blue", icon="home")
         ).add_to(m)
 
+        # マーカーB: ランドマーク（緑）
         folium.Marker(
             [target_lm['lat'], target_lm['lon']], 
             tooltip=f"ランドマーク: {target_lm['name']}", 
             icon=folium.Icon(color="green", icon="flag")
         ).add_to(m)
 
+        # マーカーC: 現在の交差点（赤）
         if current_intersection:
             folium.Marker(
                 [current_intersection['intersection_lat'], current_intersection['intersection_lon']], 
@@ -128,9 +126,10 @@ def main():
                 icon=folium.Icon(color="red", icon="exclamation-sign")
             ).add_to(m)
 
-        # マップ描画とクリックイベント取得
+        # ★重要: 地図の描画とクリックイベントの取得
         map_data = st_folium(m, height=500, width="100%")
 
+    # --- 6. 修正パネル（ここが不足していました） ---
     with col2:
         st.subheader("🛠️ 修正パネル")
         
@@ -145,3 +144,36 @@ def main():
             st.error("❌ 交差点データなし")
 
         st.markdown("---")
+        st.write("地図上で**「正しい交差点の位置」**をクリックしてください。")
+
+        # 地図がクリックされたかチェック
+        if map_data and map_data['last_clicked']:
+            clicked_lat = map_data['last_clicked']['lat']
+            clicked_lng = map_data['last_clicked']['lng']
+            
+            st.write("📍 **選択された座標**")
+            st.code(f"Lat: {clicked_lat:.6f}\nLon: {clicked_lng:.6f}")
+            
+            if st.button("この位置で更新", type="primary"):
+                # 更新データ作成
+                new_intersection_data = {
+                    "intersection_lat": clicked_lat,
+                    "intersection_lon": clicked_lng,
+                    "street_count": 99, 
+                    "is_manual_fix": True
+                }
+                
+                # メモリ上のデータを更新
+                st.session_state.df.iloc[row_index]['landmarks_with_intersections'][selected_lm_index]['nearest_intersection'] = new_intersection_data
+                
+                st.success("✅ 更新しました！")
+                st.rerun() # 画面をリロードして反映
+        else:
+            st.caption("（地図をクリックするとここに座標が表示されます）")
+        
+        # 注意書き
+        st.markdown("---")
+        st.caption("※ 修正が終わったら、左サイドバーの「修正済みCSVをダウンロード」ボタンを押して保存してください。")
+
+if __name__ == "__main__":
+    main()
