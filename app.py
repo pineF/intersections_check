@@ -10,7 +10,7 @@ import os
 
 # --- 定数設定 ---
 RECOVERY_FILE = "recovery_data.csv"
-PAGE_TITLE = "位置情報修正ツール (Final v3)"
+PAGE_TITLE = "位置情報修正ツール (Final v6)"
 
 # ページ設定
 st.set_page_config(layout="wide", page_title=PAGE_TITLE)
@@ -120,7 +120,7 @@ def main():
     # ==========================================
     st.sidebar.markdown("---")
     
-    # 進捗 (Confirmed以外は未完了扱い)
+    # 進捗
     total = len(df)
     done = len(df[df['review_status'] == 'Confirmed'])
     if total > 0: st.sidebar.progress(done / total)
@@ -129,17 +129,16 @@ def main():
     # 保存ボタン
     csv_data = df.to_csv(index=False).encode('utf-8-sig')
     st.sidebar.download_button(
-        "最新CSVをダウンロード", csv_data, "corrected_landmarks_v5.csv", "text/csv", type="primary"
+        "最新CSVをダウンロード", csv_data, "corrected_landmarks_v8.csv", "text/csv", type="primary"
     )
 
     st.sidebar.markdown("---")
     st.sidebar.header("🔍 編集対象")
 
-    # フィルタ (修正中も表示するように変更)
+    # フィルタ
     show_unfinished_only = st.sidebar.checkbox("未完了のみ表示", value=False)
     
     if show_unfinished_only:
-        # Confirmed 以外（Unchecked と Modified）を表示
         filtered_indices = df[df['review_status'] != 'Confirmed'].index.tolist()
     else:
         filtered_indices = df.index.tolist()
@@ -152,7 +151,6 @@ def main():
     options_dict = {format_option(i, df.iloc[i]): i for i in filtered_indices}
     
     current_idx = st.session_state.get('current_row_index', 0)
-    # フィルタ切り替え等で現在のインデックスがリストにない場合の救済
     if current_idx not in filtered_indices and filtered_indices:
         current_idx = filtered_indices[0]
 
@@ -210,31 +208,25 @@ def main():
         else:
             st.info("（案内文データなし）")
 
-    # ★★★ ステータス管理ロジックの修正 ★★★
     with col_s:
         current_status = row.get('review_status', 'Unchecked')
         
-        # 完了済みの場合
         if current_status == 'Confirmed':
             st.success("ステータス: ✅ 確認済")
             if st.button("未確認に戻す", use_container_width=True):
                 st.session_state.df.at[row_index, 'review_status'] = 'Unchecked'
                 auto_save(st.session_state.df)
                 st.rerun()
-        
-        # 未確認 または 修正済みの場合
         else:
             if current_status == 'Modified':
                 st.info("ステータス: ✏️ 修正あり")
             else:
                 st.info("ステータス: 未確認")
             
-            # どちらの状態でも「完了」ボタンを押せるようにする
             if st.button("✅ 確認完了 (次へ)", type="primary", use_container_width=True):
                 st.session_state.df.at[row_index, 'review_status'] = 'Confirmed'
                 auto_save(st.session_state.df)
                 
-                # 自動で次へ
                 next_indices = [i for i in filtered_indices if i > row_index]
                 if next_indices:
                     st.session_state.current_row_index = next_indices[0]
@@ -251,25 +243,43 @@ def main():
 
     # --- ケースA: 新規作成 ---
     if len(landmarks) == 0:
-        st.warning("⚠️ ランドマーク情報がありません。以下の地図をクリックして新規登録してください。")
+        st.warning("⚠️ ランドマーク情報がありません。地図をクリックするか、座標を入力して登録してください。")
         
         col_map, col_act = st.columns([2, 1])
         
+        # 店舗のデフォルト位置（地図表示用）
+        shop_lat = row.get('lat', 35.6812) if pd.notna(row.get('lat')) else 35.6812
+        shop_lon = row.get('lng', 139.7671) if pd.notna(row.get('lng')) else 139.7671
+
+        # 新規登録用の初期値設定 (クリックがある場合のみ値をセット、なければNone)
+        if st.session_state.get('temp_click'):
+            init_lat = st.session_state.temp_click[0]
+            init_lon = st.session_state.temp_click[1]
+        else:
+            init_lat = None
+            init_lon = None
+
         with col_act:
-            st.subheader("🆕 新規登録")
-            st.markdown("地図上で、店舗の入り口や目印となる場所をクリックしてください。")
+            st.subheader("🆕 新規登録フォーム")
+            st.markdown("地図をクリックすると座標が自動入力されます。")
             
-            if st.session_state.get('temp_click'):
-                lat, lon = st.session_state.temp_click
-                st.code(f"Lat: {lat:.6f}\nLon: {lon:.6f}")
-                
-                new_name = st.text_input("ランドマーク名", value=row.get('name', '店舗前') + " (入口)")
-                
-                if st.button("この位置で登録する", type="primary"):
+            # 入力フォーム（value=Noneで空欄開始）
+            new_name = st.text_input("ランドマーク名", value=row.get('name', '店舗前') + " (入口)")
+            
+            c_lat, c_lon = st.columns(2)
+            input_lat = c_lat.number_input("緯度 (Lat)", value=init_lat, format="%.6f", placeholder="クリックまたは入力")
+            input_lon = c_lon.number_input("経度 (Lon)", value=init_lon, format="%.6f", placeholder="クリックまたは入力")
+            
+            st.markdown("---")
+            if st.button("この情報を登録する", type="primary", use_container_width=True):
+                # バリデーションチェック: 空欄の場合はエラー
+                if input_lat is None or input_lon is None:
+                    st.error("❌ 緯度・経度が入力されていません。地図をクリックするか数値を入力してください。")
+                else:
                     new_landmark = {
                         'name': new_name,
-                        'lat': lat,
-                        'lon': lon,
+                        'lat': input_lat,
+                        'lon': input_lon,
                         'nearest_intersection': None 
                     }
                     landmarks.append(new_landmark)
@@ -277,20 +287,16 @@ def main():
                     st.session_state.df.at[row_index, 'review_status'] = 'Modified'
                     auto_save(st.session_state.df)
                     st.session_state.temp_click = None
-                    st.success("登録しました！続けて編集可能です。")
+                    st.success("登録しました！")
                     st.rerun()
-            else:
-                st.info("👈 地図をクリックしてください")
 
         with col_map:
-            shop_lat = row.get('lat', 35.6812) if pd.notna(row.get('lat')) else 35.6812
-            shop_lon = row.get('lng', 139.7671) if pd.notna(row.get('lng')) else 139.7671
-            
             m = folium.Map(location=[shop_lat, shop_lon], zoom_start=18)
             folium.Marker([shop_lat, shop_lon], popup="店舗位置", icon=folium.Icon(color="blue", icon="home")).add_to(m)
             
+            # クリック位置の表示
             if st.session_state.get('temp_click'):
-                folium.Marker(st.session_state.temp_click, popup="新規地点", icon=folium.Icon(color="orange", icon="star")).add_to(m)
+                folium.Marker(st.session_state.temp_click, popup="指定地点", icon=folium.Icon(color="orange", icon="star")).add_to(m)
 
             map_data = st_folium(m, height=500, width="100%")
             if map_data and map_data['last_clicked']:
@@ -366,7 +372,6 @@ def render_map_content(row_index, selected_lm_index, target_lm, row):
                 st.markdown("##### 📍 更新候補")
                 st.code(f"Lat: {lat:.6f}\nLon: {lon:.6f}")
                 
-                # 更新ボタン
                 if st.button("この位置で更新", type="primary"):
                     new_data = {
                         "intersection_lat": lat, "intersection_lon": lon,
@@ -387,7 +392,6 @@ def render_map_content(row_index, selected_lm_index, target_lm, row):
             new_lat = st.number_input("Lat", value=d_lat, format="%.6f", key="lm_lat_in")
             new_lon = st.number_input("Lon", value=d_lon, format="%.6f", key="lm_lon_in")
             
-            # 更新ボタン
             if st.button("位置を更新", type="primary"):
                 st.session_state.df.iloc[row_index]['landmarks_with_intersections'][selected_lm_index]['lat'] = new_lat
                 st.session_state.df.iloc[row_index]['landmarks_with_intersections'][selected_lm_index]['lon'] = new_lon
