@@ -3,9 +3,11 @@ import pandas as pd
 import folium
 from streamlit_folium import st_folium
 import ast
+import osmnx as ox
+import geopandas as gpd
 
 # ページ設定
-st.set_page_config(layout="wide", page_title="位置情報修正ツール (Full+Delete)")
+st.set_page_config(layout="wide", page_title="交差点修正ツール (OSMnx版)")
 
 # --- データのロード関数 ---
 @st.cache_data
@@ -17,16 +19,41 @@ def load_data(file):
         )
     return df
 
+# --- OSMnxデータ取得関数 (キャッシュ化) ---
+# 重たい処理なので、入力値が変わらない限り再計算しないようにキャッシュします
+@st.cache_data(show_spinner=False)
+def get_osmnx_data(lat, lon, dist, tolerance):
+    try:
+        # 1. グラフ取得
+        G = ox.graph_from_point((lat, lon), dist=dist, network_type='drive')
+        
+        # 2. 投影変換 (メートル単位へ)
+        G_proj = ox.project_graph(G)
+        
+        # 3. 交差点集約
+        G_cons = ox.consolidate_intersections(G_proj, tolerance=tolerance, rebuild_graph=True, dead_ends=False)
+        
+        # 4. GeoDataFrame変換
+        gdf_nodes, gdf_edges = ox.graph_to_gdfs(G_cons)
+        
+        # 5. 地図表示用に緯度経度(EPSG:4326)に戻す
+        gdf_nodes = gdf_nodes.to_crs(epsg=4326)
+        gdf_edges = gdf_edges.to_crs(epsg=4326)
+        
+        return gdf_nodes, gdf_edges, None
+    except Exception as e:
+        return None, None, str(e)
+
 # --- メインロジック ---
 def main():
-    st.title("📍 位置情報 手動修正ツール")
+    st.title("📍 位置情報 手動修正ツール (OSMnx連携)")
 
     # 1. サイドバー（データ読み込み）
     st.sidebar.header("📁 データ読み込み")
     uploaded_file = st.sidebar.file_uploader("CSVファイルをアップロード", type=["csv"])
 
     if uploaded_file is None:
-        st.info("👈 左のサイドバーから、処理済みのCSVファイルをアップロードしてください。")
+        st.info("👈 左のサイドバーから、CSVファイルをアップロードしてください。")
         return
 
     # データ初期化
@@ -64,21 +91,17 @@ def main():
         min_value=0, max_value=len(df)-1, value=st.session_state.current_row_index, step=1
     )
 
-    # 行変更検知
     if row_index != st.session_state.current_row_index:
         st.session_state.current_row_index = row_index
-        st.session_state.current_lm_index = 0 # 行が変わったらランドマーク選択もリセット
+        st.session_state.current_lm_index = 0
         st.session_state.temp_click = None
         st.rerun()
 
     row = df.iloc[row_index]
     landmarks = row['landmarks_with_intersections']
 
-    # ランドマークリストが空、またはNoneの場合の処理
     if not isinstance(landmarks, list) or len(landmarks) == 0:
-        st.warning(f"行 {row_index} には有効なランドマーク情報がありません（0件）。")
-        # 店舗情報だけ表示して終了
-        st.markdown("---")
+        st.warning(f"行 {row_index} には有効なランドマーク情報がありません。")
         st.markdown(f"## 🏠 {row.get('name', '名称不明')}")
         return
 
@@ -86,8 +109,6 @@ def main():
     
     if 'current_lm_index' not in st.session_state:
         st.session_state.current_lm_index = 0
-    
-    # 削除などでインデックスが範囲外になった場合の安全策
     if st.session_state.current_lm_index >= len(landmark_names):
         st.session_state.current_lm_index = 0
 
@@ -103,10 +124,9 @@ def main():
         st.session_state.temp_click = None
         st.rerun()
 
-    # ターゲット特定
     target_lm = landmarks[selected_lm_index]
     
-    # --- 店舗情報表示 ---
+    # 店舗情報表示
     st.markdown("---")
     shop_name = row.get('name', '名称不明')
     col_h1, col_h2 = st.columns([3, 1])
@@ -123,7 +143,7 @@ def main():
     show_map_interface(row_index, selected_lm_index, target_lm, row)
 
 
-# --- 地図と修正パネルを表示する関数 ---
+# --- 地図描画ロジック ---
 try:
     @st.fragment
     def show_map_interface(row_index, selected_lm_index, target_lm, row):
@@ -133,12 +153,10 @@ except AttributeError:
         render_map_content(row_index, selected_lm_index, target_lm, row)
 
 def render_map_content(row_index, selected_lm_index, target_lm, row):
-    # 最新の情報を取得（削除処理などで古くなっている可能性があるため再取得）
+    # データ取得
     current_list = st.session_state.df.iloc[row_index]['landmarks_with_intersections']
-    
-    # リストが空になっている場合などのガード
     if selected_lm_index >= len(current_list):
-        st.error("データが削除されました。左サイドバーで行などを選択し直してください。")
+        st.error("データエラー: リセットしてください")
         return
 
     target_lm = current_list[selected_lm_index]
@@ -146,18 +164,18 @@ def render_map_content(row_index, selected_lm_index, target_lm, row):
     
     col1, col2 = st.columns([2, 1])
     
-    # --- 右カラム：修正パネル ---
     with col2:
         st.subheader("🛠️ 修正パネル")
-        
-        edit_mode = st.radio(
-            "編集モード",
-            ["交差点の位置", "ランドマーク自体の位置"],
-            horizontal=True
-        )
-
+        edit_mode = st.radio("編集モード", ["交差点の位置", "ランドマーク自体の位置"], horizontal=True)
         st.markdown("---")
 
+        # --- OSMnx パラメータ設定 ---
+        with st.expander("🌐 交差点検索設定 (OSMnx)", expanded=True):
+            osmnx_dist = st.slider("検索半径 (m)", 50, 500, 100, step=50)
+            osmnx_tol = st.number_input("集約許容誤差 (tolerance)", value=10, min_value=1, max_value=50)
+            st.caption("※ 設定を変えると自動で再計算します")
+
+        st.markdown("---")
         # 座標表示
         if edit_mode == "交差点の位置":
             st.markdown("**現在の登録交差点**")
@@ -171,11 +189,10 @@ def render_map_content(row_index, selected_lm_index, target_lm, row):
             st.markdown("**現在のランドマーク位置**")
             st.code(f"Lat: {target_lm['lat']:.6f}\nLon: {target_lm['lon']:.6f}")
 
-    # --- 左カラム：地図 ---
     with col1:
         st.subheader(f"🗺️ 地図: {target_lm.get('name')}")
         
-        # 中心決定
+        # 中心の決定
         if st.session_state.get('temp_click'):
             center_lat, center_lon = st.session_state.temp_click
         elif edit_mode == "交差点の位置" and current_intersection:
@@ -184,23 +201,62 @@ def render_map_content(row_index, selected_lm_index, target_lm, row):
         else:
             center_lat, center_lon = target_lm['lat'], target_lm['lon']
 
-        m = folium.Map(location=[center_lat, center_lon], zoom_start=19)
+        m = folium.Map(location=[center_lat, center_lon], zoom_start=18)
 
-        # マーカー
-        folium.Marker([row['lat'], row['lng']], popup=f"店舗", icon=folium.Icon(color="blue", icon="home")).add_to(m)
-        folium.Marker([target_lm['lat'], target_lm['lon']], tooltip=f"ランドマーク", icon=folium.Icon(color="green", icon="flag")).add_to(m)
+        # --- A. OSMnxレイヤーの描画 ---
+        # 検索中心点（基本はランドマークの位置、もしくは現在の交差点位置）
+        search_lat = target_lm['lat']
+        search_lon = target_lm['lon']
+        
+        with st.spinner('交差点候補を検索中...'):
+            nodes, edges, error = get_osmnx_data(search_lat, search_lon, osmnx_dist, osmnx_tol)
+        
+        if error:
+            st.warning(f"OSMnxエラー: {error}")
+        
+        if edges is not None:
+            # 道路網（グレーの線）
+            folium.GeoJson(
+                edges,
+                style_function=lambda x: {'color': '#888888', 'weight': 2, 'opacity': 0.5},
+                name="道路網"
+            ).add_to(m)
 
+        if nodes is not None:
+            # 交差点候補（マゼンタの円）
+            # folium.GeoJsonだとクリックイベントが難しいので、CircleMarkerをループで追加する
+            for idx, node_row in nodes.iterrows():
+                folium.CircleMarker(
+                    location=[node_row.geometry.y, node_row.geometry.x],
+                    radius=6,
+                    color="#FF00FF",      # マゼンタ（目立つ色）
+                    fill=True,
+                    fill_color="#FF00FF",
+                    fill_opacity=0.6,
+                    popup=f"交差点候補 (osmid: {idx})",
+                    tooltip="交差点候補 (クリックで選択)"
+                ).add_to(m)
+
+        # --- B. 既存マーカーの描画 ---
+        # 店舗（青）
+        folium.Marker([row['lat'], row['lng']], popup="店舗", icon=folium.Icon(color="blue", icon="home")).add_to(m)
+        # ランドマーク（緑）
+        folium.Marker([target_lm['lat'], target_lm['lon']], tooltip="ランドマーク", icon=folium.Icon(color="green", icon="flag")).add_to(m)
+
+        # 現在の交差点（赤）
         if current_intersection:
             folium.Marker(
                 [current_intersection['intersection_lat'], current_intersection['intersection_lon']], 
-                popup="現在の登録交差点", icon=folium.Icon(color="red", icon="exclamation-sign")
+                popup="現在の登録地", icon=folium.Icon(color="red", icon="exclamation-sign")
             ).add_to(m)
             
+        # 修正候補（オレンジ）
         if st.session_state.get('temp_click'):
             folium.Marker(
                 st.session_state.temp_click, popup="修正候補", icon=folium.Icon(color="orange", icon="star")
             ).add_to(m)
 
+        # --- マップ描画とクリックイベント ---
         map_data = st_folium(m, height=500, width="100%")
 
         if map_data and map_data['last_clicked']:
@@ -209,9 +265,8 @@ def render_map_content(row_index, selected_lm_index, target_lm, row):
                 st.session_state.temp_click = clicked_coords
                 st.rerun()
 
-    # --- パネル下部：アクションボタン ---
+    # --- アクションボタン ---
     with col2:
-        # 1. 更新アクション
         if st.session_state.get('temp_click'):
             lat, lon = st.session_state.temp_click
             
@@ -237,24 +292,16 @@ def render_map_content(row_index, selected_lm_index, target_lm, row):
             if st.button("キャンセル"):
                 st.session_state.temp_click = None
                 st.rerun()
-
-        # 2. 削除アクション (新規追加)
+        
+        # 削除機能
         st.markdown("---")
         with st.expander("🗑️ データを削除する"):
-            st.warning("このランドマーク自体が誤りである場合、リストから削除します。この操作は元に戻せません。")
-            
             if st.button("このランドマークを削除", type="secondary"):
-                # リストから該当インデックスの要素を削除
                 current_list = st.session_state.df.iloc[row_index]['landmarks_with_intersections']
                 current_list.pop(selected_lm_index)
-                
-                # データフレームに書き戻す（参照渡しで更新されているはずだが念のため）
                 st.session_state.df.at[row_index, 'landmarks_with_intersections'] = current_list
-                
-                # 選択状態をリセット
                 st.session_state.current_lm_index = 0
                 st.session_state.temp_click = None
-                
                 st.success("削除しました。")
                 st.rerun()
 
