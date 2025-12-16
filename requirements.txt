@@ -2,3 +2,6 @@ streamlit
 pandas
 folium
 streamlit-folium
+osmnx
+geopandas
+matplotlib
