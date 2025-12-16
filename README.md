@@ -28,13 +28,14 @@ source venv/bin/activate  # Windows: venv\Scripts\activate
 
 # ライブラリのインストール
 pip install -r requirements.txt
-
+```
 
 ### アップロードするCSVファイルには以下のカラムが必要です。
-カラム名,必須,説明
-name,✅,店舗名称
-lat,✅,店舗の緯度
-lng,✅,店舗の経度
-access,-,アクセス案内文（例: 「〇〇駅 徒歩5分」）
-landmarks_with_intersections,✅,ランドマーク情報のリスト（文字列またはPythonオブジェクト）
-review_status,-,（任意）ステータス管理用。なければ自動生成されます。
+| カラム名 |     必須      | 説明 |
+| ------- | ----------- | ------- |
+| name    | ✅ | 店舗名称 |
+| lat     | ✅ | 店舗の緯度 |
+|lng      | ✅ | 店舗の経度 |
+|access   | - | アクセス案内文（例: 「〇〇駅 徒歩5分」） |
+|landmarks_with_intersections| ✅ | ランドマーク情報のリスト（文字列またはPythonオブジェクト） |
+|review_status| - | （任意）ステータス管理用。なければ自動生成されます。 |
