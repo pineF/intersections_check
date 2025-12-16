@@ -10,7 +10,7 @@ import os
 
 # --- 定数設定 ---
 RECOVERY_FILE = "recovery_data.csv"
-PAGE_TITLE = "位置情報修正ツール (Final v8)"
+PAGE_TITLE = "位置情報修正ツール (Final v9)"
 
 # ページ設定
 st.set_page_config(layout="wide", page_title=PAGE_TITLE)
@@ -33,21 +33,15 @@ def load_data(file_or_path):
 def auto_save(df):
     df.to_csv(RECOVERY_FILE, index=False)
 
-# --- 座標パース関数 (新規追加) ---
+# --- 座標パース関数 ---
 def parse_lat_lon_string(coord_str):
-    """
-    カンマ区切りの文字列を (lat, lon) のタプルに変換する。
-    失敗した場合は (None, None) を返す。
-    """
     if not coord_str:
         return None, None
     try:
-        # 全角カンマなども考慮して置換
         coord_str = coord_str.replace('，', ',')
         parts = coord_str.split(',')
         if len(parts) != 2:
             return None, None
-        
         lat = float(parts[0].strip())
         lon = float(parts[1].strip())
         return lat, lon
@@ -141,22 +135,19 @@ def main():
     # ==========================================
     st.sidebar.markdown("---")
     
-    # 進捗
     total = len(df)
     done = len(df[df['review_status'] == 'Confirmed'])
     if total > 0: st.sidebar.progress(done / total)
     st.sidebar.caption(f"完了数: {done} / {total}")
 
-    # 保存ボタン
     csv_data = df.to_csv(index=False).encode('utf-8-sig')
     st.sidebar.download_button(
-        "最新CSVをダウンロード", csv_data, "corrected_landmarks_v10.csv", "text/csv", type="primary"
+        "最新CSVをダウンロード", csv_data, "corrected_landmarks_v11.csv", "text/csv", type="primary"
     )
 
     st.sidebar.markdown("---")
     st.sidebar.header("🔍 編集対象")
 
-    # フィルタ
     show_unfinished_only = st.sidebar.checkbox("未完了のみ表示", value=False)
     
     if show_unfinished_only:
@@ -168,7 +159,6 @@ def main():
         st.sidebar.success("🎉 全て完了しました！")
         filtered_indices = df.index.tolist()
 
-    # リスト作成
     options_dict = {format_option(i, df.iloc[i]): i for i in filtered_indices}
     
     current_idx = st.session_state.get('current_row_index', 0)
@@ -210,7 +200,6 @@ def main():
             st.session_state.current_row_index = next_indices[0]
             st.session_state.temp_click = None
             st.rerun()
-
 
     # ==========================================
     # 3. メインヘッダー
@@ -259,19 +248,41 @@ def main():
 
 
     # ==========================================
-    # 4. コンテンツ分岐
+    # 4. ランドマーク管理 (統合UI)
     # ==========================================
-
-    # --- ケースA: 新規作成 ---
-    if len(landmarks) == 0:
-        st.warning("⚠️ ランドマーク情報がありません。地図をクリックするか、座標を入力して登録してください。")
+    
+    # 選択肢の作成（既存のランドマーク名 + 新規追加）
+    landmark_names = [f"{i+1}. {lm.get('name', '不明')}" for i, lm in enumerate(landmarks)]
+    options = landmark_names + ["➕ 新規登録"]
+    
+    # セッションステートのインデックス管理
+    if st.session_state.get('current_lm_index', 0) > len(landmarks): # 範囲外なら0に戻す
+        st.session_state.current_lm_index = 0
         
+    selected_option_index = st.radio(
+        "編集または追加を選択:", 
+        range(len(options)), 
+        format_func=lambda x: options[x],
+        horizontal=True,
+        index=st.session_state.current_lm_index
+    )
+    
+    if selected_option_index != st.session_state.current_lm_index:
+        st.session_state.current_lm_index = selected_option_index
+        st.session_state.temp_click = None # タブ切り替え時にクリック状態をリセット
+        st.rerun()
+
+    # --- 条件分岐: 新規登録モード vs 編集モード ---
+    
+    if selected_option_index == len(landmarks):
+        # ==========================================
+        # ケースA: 新規追加モード
+        # ==========================================
         col_map, col_act = st.columns([2, 1])
         
         shop_lat = row.get('lat', 35.6812) if pd.notna(row.get('lat')) else 35.6812
         shop_lon = row.get('lng', 139.7671) if pd.notna(row.get('lng')) else 139.7671
 
-        # 表示用の初期値文字列を作成
         default_str = ""
         if st.session_state.get('temp_click'):
             default_str = f"{st.session_state.temp_click[0]:.6f}, {st.session_state.temp_click[1]:.6f}"
@@ -280,9 +291,10 @@ def main():
             st.subheader("🆕 新規登録フォーム")
             st.markdown("地図をクリックするか、座標をカンマ区切りで入力してください。")
             
-            new_name = st.text_input("ランドマーク名", value=row.get('name', '店舗前') + " (入口)")
+            # デフォルト名: 店舗名 + 連番
+            next_num = len(landmarks) + 1
+            new_name = st.text_input("ランドマーク名", value=f"{row.get('name', '店舗')} (LM{next_num})")
             
-            # 統合された入力欄
             coord_input = st.text_input(
                 "座標 (Lat, Lon)", 
                 value=default_str, 
@@ -290,8 +302,7 @@ def main():
             )
             
             st.markdown("---")
-            if st.button("この情報を登録する", type="primary", use_container_width=True):
-                # 文字列を解析
+            if st.button("追加登録する", type="primary", use_container_width=True):
                 lat_val, lon_val = parse_lat_lon_string(coord_input)
 
                 if lat_val is None or lon_val is None:
@@ -308,7 +319,9 @@ def main():
                     st.session_state.df.at[row_index, 'review_status'] = 'Modified'
                     auto_save(st.session_state.df)
                     st.session_state.temp_click = None
-                    st.success("登録しました！")
+                    # 追加されたランドマーク（最後尾）を選択状態にする
+                    st.session_state.current_lm_index = len(landmarks) - 1
+                    st.success("追加しました！")
                     st.rerun()
 
         with col_map:
@@ -322,8 +335,16 @@ def main():
                 icon=folium.Icon(color="blue", icon="home")
             ).add_to(m)
             
+            # 既存のランドマークも表示（位置関係把握のため）
+            for lm in landmarks:
+                folium.Marker(
+                    [lm['lat'], lm['lon']],
+                    tooltip=lm.get('name', '既存LM'),
+                    icon=folium.Icon(color="gray", icon="flag")
+                ).add_to(m)
+
             if st.session_state.get('temp_click'):
-                folium.Marker(st.session_state.temp_click, popup="指定地点", icon=folium.Icon(color="orange", icon="star")).add_to(m)
+                folium.Marker(st.session_state.temp_click, popup="新規地点", icon=folium.Icon(color="orange", icon="star")).add_to(m)
 
             map_data = st_folium(m, height=500, width="100%")
             if map_data and map_data['last_clicked']:
@@ -332,32 +353,15 @@ def main():
                     st.session_state.temp_click = (click_lat, click_lon)
                     st.rerun()
 
-    # --- ケースB: 通常編集 ---
     else:
-        landmark_names = [lm.get('name', '不明') for lm in landmarks]
-        if st.session_state.get('current_lm_index', 0) >= len(landmark_names):
-            st.session_state.current_lm_index = 0
-
-        # タブ選択
-        selected_lm_index = st.session_state.current_lm_index
-        if len(landmark_names) > 1:
-            selected_lm_index = st.radio(
-                "編集するランドマークを選択", 
-                range(len(landmark_names)), 
-                format_func=lambda x: f"{x+1}. {landmark_names[x]}",
-                horizontal=True,
-                index=st.session_state.current_lm_index
-            )
-            if selected_lm_index != st.session_state.current_lm_index:
-                st.session_state.current_lm_index = selected_lm_index
-                st.session_state.temp_click = None
-                st.rerun()
-
-        target_lm = landmarks[selected_lm_index]
-        show_map_interface(row_index, selected_lm_index, target_lm, row)
+        # ==========================================
+        # ケースB: 編集モード
+        # ==========================================
+        target_lm = landmarks[selected_option_index]
+        show_map_interface(row_index, selected_option_index, target_lm, row)
 
 
-# --- 地図インターフェース ---
+# --- 地図インターフェース（編集用） ---
 try:
     @st.fragment
     def show_map_interface(row_index, selected_lm_index, target_lm, row):
@@ -368,7 +372,12 @@ except AttributeError:
 
 def render_map_content(row_index, selected_lm_index, target_lm, row):
     current_list = st.session_state.df.iloc[row_index]['landmarks_with_intersections']
-    if selected_lm_index >= len(current_list): return
+    
+    # 削除操作などでインデックスがずれた場合のガード
+    if selected_lm_index >= len(current_list):
+        st.session_state.current_lm_index = 0
+        st.rerun()
+        return
 
     target_lm = current_list[selected_lm_index]
     current_intersection = target_lm.get('nearest_intersection')
@@ -414,7 +423,6 @@ def render_map_content(row_index, selected_lm_index, target_lm, row):
         else:
             st.markdown("**ランドマーク位置**")
             
-            # 現在値またはクリック値をデフォルトにする
             if st.session_state.get('temp_click'):
                 d_lat, d_lon = st.session_state.temp_click
             else:
@@ -422,7 +430,6 @@ def render_map_content(row_index, selected_lm_index, target_lm, row):
             
             default_str = f"{d_lat:.6f}, {d_lon:.6f}"
 
-            # 統合された入力欄
             coord_input_lm = st.text_input(
                 "座標 (Lat, Lon)", 
                 value=default_str,
@@ -482,6 +489,7 @@ def render_map_content(row_index, selected_lm_index, target_lm, row):
             icon=folium.Icon(color="blue", icon="home")
         ).add_to(m)
         
+        # 編集対象
         lm_name = target_lm.get('name', 'ランドマーク')
         folium.Marker(
             [target_lm['lat'], target_lm['lon']], 
@@ -489,6 +497,15 @@ def render_map_content(row_index, selected_lm_index, target_lm, row):
             popup=lm_name,
             icon=folium.Icon(color="green", icon="flag")
         ).add_to(m)
+        
+        # 他のランドマーク（参考表示）
+        for i, lm in enumerate(current_list):
+            if i != selected_lm_index:
+                folium.Marker(
+                    [lm['lat'], lm['lon']],
+                    tooltip=lm.get('name', '他LM'),
+                    icon=folium.Icon(color="gray", icon="flag")
+                ).add_to(m)
 
         if current_intersection:
             folium.Marker(
@@ -513,12 +530,13 @@ def render_map_content(row_index, selected_lm_index, target_lm, row):
     with col2:
         st.markdown("---")
         with st.expander("🗑️ 削除"):
-            if st.button("削除実行"):
+            if st.button("このランドマークを削除"):
                 st.session_state.df.iloc[row_index]['landmarks_with_intersections'].pop(selected_lm_index)
                 st.session_state.df.at[row_index, 'review_status'] = 'Modified'
                 auto_save(st.session_state.df)
                 st.session_state.current_lm_index = 0
                 st.session_state.temp_click = None
+                st.success("削除しました")
                 st.rerun()
 
 if __name__ == "__main__":
