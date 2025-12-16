@@ -518,7 +518,7 @@ def render_map_content(row_index, selected_lm_index, target_lm, row):
         if st.session_state.get('temp_click'):
             folium.Marker(st.session_state.temp_click, popup="修正候補", icon=folium.Icon(color="orange", icon="star")).add_to(m)
 
-        map_data = st_folium(m, height=500, width="100%")
+        map_data = st_folium(m, height=700, width="100%")
         if map_data and map_data['last_clicked']:
             rl, rln = map_data['last_clicked']['lat'], map_data['last_clicked']['lng']
             sl, sln, snapped = snap_to_node(rl, rln, st.session_state.get('current_osmnx_nodes'))
