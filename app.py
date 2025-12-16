@@ -189,7 +189,7 @@ def render_map_content(row_index, selected_lm_index, target_lm, row):
         st.markdown("---")
 
         with st.expander("🌐 交差点検索設定 (OSMnx)", expanded=True):
-            osmnx_dist = st.slider("検索半径 (m)", 50, 500, 100, step=50)
+            osmnx_dist = st.slider("検索半径 (m)", 50, 500, 300, step=50)
             osmnx_tol = st.number_input("集約許容誤差", value=10, min_value=1, max_value=50)
 
         st.markdown("---")
