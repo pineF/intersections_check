@@ -10,7 +10,7 @@ import os
 
 # --- 定数設定 ---
 RECOVERY_FILE = "recovery_data.csv"
-PAGE_TITLE = "位置情報修正ツール (Final v2)"
+PAGE_TITLE = "位置情報修正ツール (Final v3)"
 
 # ページ設定
 st.set_page_config(layout="wide", page_title=PAGE_TITLE)
@@ -120,25 +120,27 @@ def main():
     # ==========================================
     st.sidebar.markdown("---")
     
-    # 進捗
+    # 進捗 (Confirmed以外は未完了扱い)
     total = len(df)
-    done = len(df[df['review_status'] != 'Unchecked'])
+    done = len(df[df['review_status'] == 'Confirmed'])
     if total > 0: st.sidebar.progress(done / total)
-    st.sidebar.caption(f"進捗: {done} / {total}")
+    st.sidebar.caption(f"完了数: {done} / {total}")
 
     # 保存ボタン
     csv_data = df.to_csv(index=False).encode('utf-8-sig')
     st.sidebar.download_button(
-        "最新CSVをダウンロード", csv_data, "corrected_landmarks_v4.csv", "text/csv", type="primary"
+        "最新CSVをダウンロード", csv_data, "corrected_landmarks_v5.csv", "text/csv", type="primary"
     )
 
     st.sidebar.markdown("---")
     st.sidebar.header("🔍 編集対象")
 
-    # フィルタ
+    # フィルタ (修正中も表示するように変更)
     show_unfinished_only = st.sidebar.checkbox("未完了のみ表示", value=False)
+    
     if show_unfinished_only:
-        filtered_indices = df[df['review_status'] == 'Unchecked'].index.tolist()
+        # Confirmed 以外（Unchecked と Modified）を表示
+        filtered_indices = df[df['review_status'] != 'Confirmed'].index.tolist()
     else:
         filtered_indices = df.index.tolist()
 
@@ -150,6 +152,7 @@ def main():
     options_dict = {format_option(i, df.iloc[i]): i for i in filtered_indices}
     
     current_idx = st.session_state.get('current_row_index', 0)
+    # フィルタ切り替え等で現在のインデックスがリストにない場合の救済
     if current_idx not in filtered_indices and filtered_indices:
         current_idx = filtered_indices[0]
 
@@ -191,7 +194,7 @@ def main():
 
 
     # ==========================================
-    # 3. メインヘッダー (共通表示)
+    # 3. メインヘッダー
     # ==========================================
     row = df.iloc[row_index]
     landmarks = row['landmarks_with_intersections']
@@ -201,45 +204,52 @@ def main():
     col_h, col_s = st.columns([3, 1])
     
     with col_h:
-        # 店舗名
         st.markdown(f"## 🏠 {row.get('name', '名称不明')}")
-        
-        # ★アクセス文言の表示（大きく表示するように修正）★
         if 'access' in row and pd.notna(row['access']):
             st.markdown(f"#### 🚃 {row['access']}")
         else:
             st.info("（案内文データなし）")
 
+    # ★★★ ステータス管理ロジックの修正 ★★★
     with col_s:
-        # ステータスボタン (データ有無に関わらず表示)
         current_status = row.get('review_status', 'Unchecked')
-        if current_status == 'Unchecked':
-            st.info("ステータス: 未確認")
-            if st.button("✅ 確認完了 (次へ)", type="primary", use_container_width=True):
-                st.session_state.df.at[row_index, 'review_status'] = 'Confirmed'
-                auto_save(st.session_state.df)
-                next_indices = [i for i in filtered_indices if i > row_index]
-                if next_indices:
-                    st.session_state.current_row_index = next_indices[0]
-                st.session_state.temp_click = None
-                st.rerun()
-        elif current_status == 'Confirmed':
+        
+        # 完了済みの場合
+        if current_status == 'Confirmed':
             st.success("ステータス: ✅ 確認済")
             if st.button("未確認に戻す", use_container_width=True):
                 st.session_state.df.at[row_index, 'review_status'] = 'Unchecked'
                 auto_save(st.session_state.df)
                 st.rerun()
+        
+        # 未確認 または 修正済みの場合
         else:
-            st.success("ステータス: ✏️ 修正済")
+            if current_status == 'Modified':
+                st.info("ステータス: ✏️ 修正あり")
+            else:
+                st.info("ステータス: 未確認")
+            
+            # どちらの状態でも「完了」ボタンを押せるようにする
+            if st.button("✅ 確認完了 (次へ)", type="primary", use_container_width=True):
+                st.session_state.df.at[row_index, 'review_status'] = 'Confirmed'
+                auto_save(st.session_state.df)
+                
+                # 自動で次へ
+                next_indices = [i for i in filtered_indices if i > row_index]
+                if next_indices:
+                    st.session_state.current_row_index = next_indices[0]
+                
+                st.session_state.temp_click = None
+                st.rerun()
 
     st.markdown("---")
 
 
     # ==========================================
-    # 4. コンテンツ分岐 (新規作成 vs 編集)
+    # 4. コンテンツ分岐
     # ==========================================
 
-    # --- ケースA: ランドマーク情報がない場合 (新規作成) ---
+    # --- ケースA: 新規作成 ---
     if len(landmarks) == 0:
         st.warning("⚠️ ランドマーク情報がありません。以下の地図をクリックして新規登録してください。")
         
@@ -267,7 +277,7 @@ def main():
                     st.session_state.df.at[row_index, 'review_status'] = 'Modified'
                     auto_save(st.session_state.df)
                     st.session_state.temp_click = None
-                    st.success("登録しました！")
+                    st.success("登録しました！続けて編集可能です。")
                     st.rerun()
             else:
                 st.info("👈 地図をクリックしてください")
@@ -289,7 +299,7 @@ def main():
                     st.session_state.temp_click = (click_lat, click_lon)
                     st.rerun()
 
-    # --- ケースB: ランドマークがある場合 (通常編集) ---
+    # --- ケースB: 通常編集 ---
     else:
         landmark_names = [lm.get('name', '不明') for lm in landmarks]
         if st.session_state.get('current_lm_index', 0) >= len(landmark_names):
@@ -356,6 +366,7 @@ def render_map_content(row_index, selected_lm_index, target_lm, row):
                 st.markdown("##### 📍 更新候補")
                 st.code(f"Lat: {lat:.6f}\nLon: {lon:.6f}")
                 
+                # 更新ボタン
                 if st.button("この位置で更新", type="primary"):
                     new_data = {
                         "intersection_lat": lat, "intersection_lon": lon,
@@ -376,6 +387,7 @@ def render_map_content(row_index, selected_lm_index, target_lm, row):
             new_lat = st.number_input("Lat", value=d_lat, format="%.6f", key="lm_lat_in")
             new_lon = st.number_input("Lon", value=d_lon, format="%.6f", key="lm_lon_in")
             
+            # 更新ボタン
             if st.button("位置を更新", type="primary"):
                 st.session_state.df.iloc[row_index]['landmarks_with_intersections'][selected_lm_index]['lat'] = new_lat
                 st.session_state.df.iloc[row_index]['landmarks_with_intersections'][selected_lm_index]['lon'] = new_lon
