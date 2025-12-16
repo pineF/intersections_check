@@ -10,7 +10,7 @@ import os
 
 # --- 定数設定 ---
 RECOVERY_FILE = "recovery_data.csv"
-PAGE_TITLE = "位置情報修正ツール (Final v6)"
+PAGE_TITLE = "位置情報修正ツール (Final v7)"
 
 # ページ設定
 st.set_page_config(layout="wide", page_title=PAGE_TITLE)
@@ -129,7 +129,7 @@ def main():
     # 保存ボタン
     csv_data = df.to_csv(index=False).encode('utf-8-sig')
     st.sidebar.download_button(
-        "最新CSVをダウンロード", csv_data, "corrected_landmarks_v8.csv", "text/csv", type="primary"
+        "最新CSVをダウンロード", csv_data, "corrected_landmarks_v9.csv", "text/csv", type="primary"
     )
 
     st.sidebar.markdown("---")
@@ -247,11 +247,9 @@ def main():
         
         col_map, col_act = st.columns([2, 1])
         
-        # 店舗のデフォルト位置（地図表示用）
         shop_lat = row.get('lat', 35.6812) if pd.notna(row.get('lat')) else 35.6812
         shop_lon = row.get('lng', 139.7671) if pd.notna(row.get('lng')) else 139.7671
 
-        # 新規登録用の初期値設定 (クリックがある場合のみ値をセット、なければNone)
         if st.session_state.get('temp_click'):
             init_lat = st.session_state.temp_click[0]
             init_lon = st.session_state.temp_click[1]
@@ -263,7 +261,6 @@ def main():
             st.subheader("🆕 新規登録フォーム")
             st.markdown("地図をクリックすると座標が自動入力されます。")
             
-            # 入力フォーム（value=Noneで空欄開始）
             new_name = st.text_input("ランドマーク名", value=row.get('name', '店舗前') + " (入口)")
             
             c_lat, c_lon = st.columns(2)
@@ -272,7 +269,6 @@ def main():
             
             st.markdown("---")
             if st.button("この情報を登録する", type="primary", use_container_width=True):
-                # バリデーションチェック: 空欄の場合はエラー
                 if input_lat is None or input_lon is None:
                     st.error("❌ 緯度・経度が入力されていません。地図をクリックするか数値を入力してください。")
                 else:
@@ -292,9 +288,16 @@ def main():
 
         with col_map:
             m = folium.Map(location=[shop_lat, shop_lon], zoom_start=18)
-            folium.Marker([shop_lat, shop_lon], popup="店舗位置", icon=folium.Icon(color="blue", icon="home")).add_to(m)
             
-            # クリック位置の表示
+            # 店舗マーカー
+            shop_name = row.get('name', '店舗')
+            folium.Marker(
+                [shop_lat, shop_lon], 
+                tooltip=f"店舗: {shop_name}", 
+                popup=shop_name,
+                icon=folium.Icon(color="blue", icon="home")
+            ).add_to(m)
+            
             if st.session_state.get('temp_click'):
                 folium.Marker(st.session_state.temp_click, popup="指定地点", icon=folium.Icon(color="orange", icon="star")).add_to(m)
 
@@ -430,11 +433,32 @@ def render_map_content(row_index, selected_lm_index, target_lm, row):
 
         shop_lat = row.get('lat') if pd.notna(row.get('lat')) else center_lat
         shop_lon = row.get('lng') if pd.notna(row.get('lng')) else center_lon
-        folium.Marker([shop_lat, shop_lon], popup="店舗", icon=folium.Icon(color="blue", icon="home")).add_to(m)
-        folium.Marker([target_lm['lat'], target_lm['lon']], tooltip="LM", icon=folium.Icon(color="green", icon="flag")).add_to(m)
+        
+        # 店舗マーカーにも名前追加
+        shop_name = row.get('name', '店舗')
+        folium.Marker(
+            [shop_lat, shop_lon], 
+            tooltip=f"店舗: {shop_name}",
+            popup=shop_name,
+            icon=folium.Icon(color="blue", icon="home")
+        ).add_to(m)
+        
+        # ★★★ 修正箇所: ランドマーク名を表示 ★★★
+        lm_name = target_lm.get('name', 'ランドマーク')
+        folium.Marker(
+            [target_lm['lat'], target_lm['lon']], 
+            tooltip=lm_name, # マウスオーバーで表示
+            popup=lm_name,   # クリックで表示
+            icon=folium.Icon(color="green", icon="flag")
+        ).add_to(m)
 
         if current_intersection:
-            folium.Marker([current_intersection['intersection_lat'], current_intersection['intersection_lon']], popup="現在地", icon=folium.Icon(color="red")).add_to(m)
+            folium.Marker(
+                [current_intersection['intersection_lat'], current_intersection['intersection_lon']], 
+                popup="登録済み交差点",
+                tooltip="登録済み交差点",
+                icon=folium.Icon(color="red")
+            ).add_to(m)
             
         if st.session_state.get('temp_click'):
             folium.Marker(st.session_state.temp_click, popup="修正候補", icon=folium.Icon(color="orange", icon="star")).add_to(m)
