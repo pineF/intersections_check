@@ -5,10 +5,10 @@ from streamlit_folium import st_folium
 import ast
 import osmnx as ox
 import geopandas as gpd
-import numpy as np # 距離計算用に必要
+import numpy as np
 
 # ページ設定
-st.set_page_config(layout="wide", page_title="交差点修正ツール")
+st.set_page_config(layout="wide", page_title="位置情報修正ツール (Direct Edit)")
 
 # --- データのロード関数 ---
 @st.cache_data
@@ -34,36 +34,25 @@ def get_osmnx_data(lat, lon, dist, tolerance):
     except Exception as e:
         return None, None, str(e)
 
-# --- スナップ判定関数 (New!) ---
+# --- スナップ判定関数 ---
 def snap_to_node(clicked_lat, clicked_lon, nodes_gdf, threshold_deg=0.0001):
-    """
-    クリック位置に近いノードがあれば、その座標を返す。
-    threshold_deg: 吸着する距離の閾値（約10m程度）
-    """
     if nodes_gdf is None or nodes_gdf.empty:
         return clicked_lat, clicked_lon, False
-
-    # 全ノードとの距離を計算（簡易的なユークリッド距離）
-    # ※厳密なメートル計算ではないですが、UI上の吸着判定には十分です
+    
     distances = np.sqrt(
         (nodes_gdf.geometry.y - clicked_lat)**2 + 
         (nodes_gdf.geometry.x - clicked_lon)**2
     )
-    
     min_dist_idx = distances.idxmin()
-    min_dist = distances.min()
-
-    # 閾値以内なら吸着
-    if min_dist < threshold_deg:
+    if distances.min() < threshold_deg:
         nearest_node = nodes_gdf.loc[min_dist_idx]
         return nearest_node.geometry.y, nearest_node.geometry.x, True
-    
     return clicked_lat, clicked_lon, False
 
 
 # --- メインロジック ---
 def main():
-    st.title("📍 位置情報 手動修正ツール (OSMnx連携 + Snap)")
+    st.title("📍 位置情報 手動修正ツール")
 
     # 1. データ読み込み
     st.sidebar.header("📁 データ読み込み")
@@ -79,7 +68,7 @@ def main():
     if st.sidebar.button("データをリセット/再読み込み"):
         st.session_state.df = load_data(uploaded_file)
         st.session_state.temp_click = None
-        st.session_state.current_osmnx_nodes = None # キャッシュクリア
+        st.session_state.current_osmnx_nodes = None
         st.rerun()
 
     df = st.session_state.df
@@ -171,7 +160,6 @@ except AttributeError:
 
 
 def render_map_content(row_index, selected_lm_index, target_lm, row):
-    # データ取得チェック
     current_list = st.session_state.df.iloc[row_index]['landmarks_with_intersections']
     if selected_lm_index >= len(current_list):
         st.error("データエラー: リセットしてください")
@@ -182,7 +170,7 @@ def render_map_content(row_index, selected_lm_index, target_lm, row):
     
     col1, col2 = st.columns([2, 1])
     
-    # --- パネル ---
+    # --- パネル部分 (ロジック変更) ---
     with col2:
         st.subheader("🛠️ 修正パネル")
         edit_mode = st.radio("編集モード", ["交差点の位置", "ランドマーク自体の位置"], horizontal=True)
@@ -193,21 +181,83 @@ def render_map_content(row_index, selected_lm_index, target_lm, row):
             osmnx_tol = st.number_input("集約許容誤差", value=10, min_value=1, max_value=50)
 
         st.markdown("---")
+
+        # --- A. 交差点モード（読み取り専用 + 地図クリックのみ） ---
         if edit_mode == "交差点の位置":
             st.markdown("**現在の登録交差点**")
             if current_intersection:
                 status = "🟢 手動修正済" if current_intersection.get('is_manual_fix') else "🤖 自動検出"
                 st.caption(f"ステータス: {status}")
                 st.code(f"Lat: {current_intersection['intersection_lat']:.6f}\nLon: {current_intersection['intersection_lon']:.6f}")
-        else:
-            st.markdown("**現在のランドマーク位置**")
-            st.code(f"Lat: {target_lm['lat']:.6f}\nLon: {target_lm['lon']:.6f}")
+            else:
+                st.error("交差点データなし")
 
-    # --- 地図 ---
+            # 修正候補（地図クリック時のみ表示）
+            if st.session_state.get('temp_click'):
+                lat, lon = st.session_state.temp_click
+                st.markdown("##### 📍 修正候補 (地図選択)")
+                st.code(f"Lat: {lat:.6f}\nLon: {lon:.6f}")
+                
+                if st.button("交差点をこの位置で更新", type="primary"):
+                    new_data = {
+                        "intersection_lat": lat, "intersection_lon": lon,
+                        "street_count": 99, "is_manual_fix": True
+                    }
+                    st.session_state.df.iloc[row_index]['landmarks_with_intersections'][selected_lm_index]['nearest_intersection'] = new_data
+                    st.session_state.temp_click = None
+                    st.success("交差点位置を更新しました！")
+                    st.rerun()
+                
+                if st.button("キャンセル"):
+                    st.session_state.temp_click = None
+                    st.rerun()
+            else:
+                st.info("地図上の交差点候補（ピンク色の丸）をクリックしてください。")
+
+
+        # --- B. ランドマークモード（直接入力 + 地図クリック） ---
+        else:
+            st.markdown("**現在のランドマーク位置 (直接入力可)**")
+            
+            # 初期値の決定優先順位:
+            # 1. 今地図をクリックした座標 (temp_click)
+            # 2. まだクリックしてないなら、元の座標 (target_lm)
+            
+            # デフォルト値
+            default_lat = target_lm['lat']
+            default_lon = target_lm['lon']
+
+            # 地図クリックがあれば、その値をフォームの初期値にセットする
+            if st.session_state.get('temp_click'):
+                default_lat = st.session_state.temp_click[0]
+                default_lon = st.session_state.temp_click[1]
+
+            # 入力フォーム (number_input)
+            # keyを指定することで、stateと紐づける
+            new_lat = st.number_input("Latitude (緯度)", value=default_lat, format="%.6f", key="input_lm_lat")
+            new_lon = st.number_input("Longitude (経度)", value=default_lon, format="%.6f", key="input_lm_lon")
+            
+            # 更新ボタン (常に表示)
+            if st.button("ランドマーク位置を更新", type="primary"):
+                st.session_state.df.iloc[row_index]['landmarks_with_intersections'][selected_lm_index]['lat'] = new_lat
+                st.session_state.df.iloc[row_index]['landmarks_with_intersections'][selected_lm_index]['lon'] = new_lon
+                
+                # 完了処理
+                st.session_state.temp_click = None
+                st.success("ランドマーク位置を更新しました！")
+                st.rerun()
+            
+            if st.session_state.get('temp_click'):
+                if st.button("選択解除"):
+                    st.session_state.temp_click = None
+                    st.rerun()
+
+
+    # --- 地図部分 ---
     with col1:
         st.subheader(f"🗺️ 地図: {target_lm.get('name')}")
         
-        # 中心決定
+        # 中心の決定
         if st.session_state.get('temp_click'):
             center_lat, center_lon = st.session_state.temp_click
         elif edit_mode == "交差点の位置" and current_intersection:
@@ -218,21 +268,15 @@ def render_map_content(row_index, selected_lm_index, target_lm, row):
 
         m = folium.Map(location=[center_lat, center_lon], zoom_start=18)
 
-        # OSMnxデータの取得
+        # OSMnxデータ
         search_lat = target_lm['lat']
         search_lon = target_lm['lon']
         
         with st.spinner('交差点候補を検索中...'):
             nodes, edges, error = get_osmnx_data(search_lat, search_lon, osmnx_dist, osmnx_tol)
-            
-            # スナップ用にsession_stateに保存しておく
             if nodes is not None:
                 st.session_state.current_osmnx_nodes = nodes
         
-        if error:
-            st.warning(f"OSMnxエラー: {error}")
-        
-        # 描画
         if edges is not None:
             folium.GeoJson(edges, style_function=lambda x: {'color': '#888888', 'weight': 2, 'opacity': 0.5}).add_to(m)
 
@@ -240,11 +284,7 @@ def render_map_content(row_index, selected_lm_index, target_lm, row):
             for idx, node_row in nodes.iterrows():
                 folium.CircleMarker(
                     location=[node_row.geometry.y, node_row.geometry.x],
-                    radius=7,
-                    color="#FF00FF", # マゼンタ
-                    fill=True,
-                    fill_color="#FF00FF",
-                    fill_opacity=0.6,
+                    radius=7, color="#FF00FF", fill=True, fill_color="#FF00FF", fill_opacity=0.6,
                     tooltip="交差点候補 (クリックで吸着)"
                 ).add_to(m)
 
@@ -270,49 +310,20 @@ def render_map_content(row_index, selected_lm_index, target_lm, row):
             raw_lat = map_data['last_clicked']['lat']
             raw_lon = map_data['last_clicked']['lng']
             
-            # ★ここでスナップ処理を行う★
+            # スナップ処理 (交差点モードの時のみ有効にするのが自然だが、要望次第。一応両方で有効にしておく)
             snapped_lat, snapped_lon, is_snapped = snap_to_node(
-                raw_lat, raw_lon, 
-                st.session_state.get('current_osmnx_nodes')
+                raw_lat, raw_lon, st.session_state.get('current_osmnx_nodes')
             )
             
             new_coords = (snapped_lat, snapped_lon)
-            
-            # 前回と同じ座標でなければ更新
             if st.session_state.get('temp_click') != new_coords:
                 st.session_state.temp_click = new_coords
                 if is_snapped:
-                    st.toast("🧲 交差点候補にスナップしました！") # 通知を出す
+                    st.toast("🧲 交差点候補にスナップしました！")
                 st.rerun()
 
-    # --- アクション ---
+    # 削除機能 (共通)
     with col2:
-        if st.session_state.get('temp_click'):
-            lat, lon = st.session_state.temp_click
-            
-            st.markdown(f"##### 📍 修正候補 ({edit_mode})")
-            st.code(f"Lat: {lat:.6f}\nLon: {lon:.6f}")
-            
-            if st.button("この位置で更新する", type="primary"):
-                if edit_mode == "交差点の位置":
-                    new_data = {
-                        "intersection_lat": lat, "intersection_lon": lon,
-                        "street_count": 99, "is_manual_fix": True
-                    }
-                    st.session_state.df.iloc[row_index]['landmarks_with_intersections'][selected_lm_index]['nearest_intersection'] = new_data
-                    st.success("交差点位置を更新しました！")
-                else:
-                    st.session_state.df.iloc[row_index]['landmarks_with_intersections'][selected_lm_index]['lat'] = lat
-                    st.session_state.df.iloc[row_index]['landmarks_with_intersections'][selected_lm_index]['lon'] = lon
-                    st.success("ランドマーク位置を更新しました！")
-                
-                st.session_state.temp_click = None
-                st.rerun()
-            
-            if st.button("キャンセル"):
-                st.session_state.temp_click = None
-                st.rerun()
-        
         st.markdown("---")
         with st.expander("🗑️ データを削除する"):
             if st.button("このランドマークを削除", type="secondary"):
