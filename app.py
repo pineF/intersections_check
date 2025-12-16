@@ -10,7 +10,7 @@ import os
 
 # --- 定数設定 ---
 RECOVERY_FILE = "recovery_data.csv"
-PAGE_TITLE = "位置情報修正ツール (Final v9)"
+PAGE_TITLE = "位置情報修正ツール (Final v10)"
 
 # ページ設定
 st.set_page_config(layout="wide", page_title=PAGE_TITLE)
@@ -48,11 +48,12 @@ def parse_lat_lon_string(coord_str):
     except ValueError:
         return None, None
 
-# --- OSMnxデータ取得関数 ---
+# --- OSMnxデータ取得関数 (network_typeを追加) ---
 @st.cache_data(show_spinner=False)
-def get_osmnx_data(lat, lon, dist, tolerance):
+def get_osmnx_data(lat, lon, dist, tolerance, network_type):
     try:
-        G = ox.graph_from_point((lat, lon), dist=dist, network_type='drive')
+        # network_type を動的に指定 ('drive' or 'walk')
+        G = ox.graph_from_point((lat, lon), dist=dist, network_type=network_type)
         G_proj = ox.project_graph(G)
         G_cons = ox.consolidate_intersections(G_proj, tolerance=tolerance, rebuild_graph=True, dead_ends=False)
         gdf_nodes, gdf_edges = ox.graph_to_gdfs(G_cons)
@@ -142,7 +143,7 @@ def main():
 
     csv_data = df.to_csv(index=False).encode('utf-8-sig')
     st.sidebar.download_button(
-        "最新CSVをダウンロード", csv_data, "corrected_landmarks_v11.csv", "text/csv", type="primary"
+        "最新CSVをダウンロード", csv_data, "corrected_landmarks_v12.csv", "text/csv", type="primary"
     )
 
     st.sidebar.markdown("---")
@@ -246,17 +247,14 @@ def main():
 
     st.markdown("---")
 
-
     # ==========================================
-    # 4. ランドマーク管理 (統合UI)
+    # 4. ランドマーク管理
     # ==========================================
     
-    # 選択肢の作成（既存のランドマーク名 + 新規追加）
     landmark_names = [f"{i+1}. {lm.get('name', '不明')}" for i, lm in enumerate(landmarks)]
     options = landmark_names + ["➕ 新規登録"]
     
-    # セッションステートのインデックス管理
-    if st.session_state.get('current_lm_index', 0) > len(landmarks): # 範囲外なら0に戻す
+    if st.session_state.get('current_lm_index', 0) > len(landmarks): 
         st.session_state.current_lm_index = 0
         
     selected_option_index = st.radio(
@@ -269,15 +267,12 @@ def main():
     
     if selected_option_index != st.session_state.current_lm_index:
         st.session_state.current_lm_index = selected_option_index
-        st.session_state.temp_click = None # タブ切り替え時にクリック状態をリセット
+        st.session_state.temp_click = None
         st.rerun()
 
-    # --- 条件分岐: 新規登録モード vs 編集モード ---
-    
+    # --- 条件分岐: 新規登録 vs 編集 ---
     if selected_option_index == len(landmarks):
-        # ==========================================
-        # ケースA: 新規追加モード
-        # ==========================================
+        # ケースA: 新規追加
         col_map, col_act = st.columns([2, 1])
         
         shop_lat = row.get('lat', 35.6812) if pd.notna(row.get('lat')) else 35.6812
@@ -291,7 +286,6 @@ def main():
             st.subheader("🆕 新規登録フォーム")
             st.markdown("地図をクリックするか、座標をカンマ区切りで入力してください。")
             
-            # デフォルト名: 店舗名 + 連番
             next_num = len(landmarks) + 1
             new_name = st.text_input("ランドマーク名", value=f"{row.get('name', '店舗')} (LM{next_num})")
             
@@ -306,7 +300,7 @@ def main():
                 lat_val, lon_val = parse_lat_lon_string(coord_input)
 
                 if lat_val is None or lon_val is None:
-                    st.error("❌ 座標の形式が正しくありません。「35.123, 139.123」のようにカンマ区切りで入力するか、地図をクリックしてください。")
+                    st.error("❌ 座標の形式が正しくありません。")
                 else:
                     new_landmark = {
                         'name': new_name,
@@ -319,27 +313,21 @@ def main():
                     st.session_state.df.at[row_index, 'review_status'] = 'Modified'
                     auto_save(st.session_state.df)
                     st.session_state.temp_click = None
-                    # 追加されたランドマーク（最後尾）を選択状態にする
                     st.session_state.current_lm_index = len(landmarks) - 1
                     st.success("追加しました！")
                     st.rerun()
 
         with col_map:
             m = folium.Map(location=[shop_lat, shop_lon], zoom_start=18)
-            
             shop_name = row.get('name', '店舗')
             folium.Marker(
-                [shop_lat, shop_lon], 
-                tooltip=f"店舗: {shop_name}", 
-                popup=shop_name,
+                [shop_lat, shop_lon], tooltip=f"店舗: {shop_name}", popup=shop_name,
                 icon=folium.Icon(color="blue", icon="home")
             ).add_to(m)
             
-            # 既存のランドマークも表示（位置関係把握のため）
             for lm in landmarks:
                 folium.Marker(
-                    [lm['lat'], lm['lon']],
-                    tooltip=lm.get('name', '既存LM'),
+                    [lm['lat'], lm['lon']], tooltip=lm.get('name', '既存LM'),
                     icon=folium.Icon(color="gray", icon="flag")
                 ).add_to(m)
 
@@ -354,9 +342,7 @@ def main():
                     st.rerun()
 
     else:
-        # ==========================================
         # ケースB: 編集モード
-        # ==========================================
         target_lm = landmarks[selected_option_index]
         show_map_interface(row_index, selected_option_index, target_lm, row)
 
@@ -373,7 +359,6 @@ except AttributeError:
 def render_map_content(row_index, selected_lm_index, target_lm, row):
     current_list = st.session_state.df.iloc[row_index]['landmarks_with_intersections']
     
-    # 削除操作などでインデックスがずれた場合のガード
     if selected_lm_index >= len(current_list):
         st.session_state.current_lm_index = 0
         st.rerun()
@@ -391,6 +376,8 @@ def render_map_content(row_index, selected_lm_index, target_lm, row):
         
         st.markdown("---")
         with st.expander("🌐 交差点検索設定 (OSMnx)", expanded=True):
+            # Drive / Walk の選択を追加
+            network_type = st.radio("移動タイプ", ["drive", "walk"], index=0, horizontal=True)
             osmnx_dist = st.slider("検索半径 (m)", 50, 500, 300, step=50)
             osmnx_tol = st.number_input("許容誤差 (m)", min_value=1, value=10, step=1)
 
@@ -467,12 +454,15 @@ def render_map_content(row_index, selected_lm_index, target_lm, row):
 
         m = folium.Map(location=[center_lat, center_lon], zoom_start=18)
 
-        with st.spinner('交差点検索中...'):
-            nodes, edges, err = get_osmnx_data(target_lm['lat'], target_lm['lon'], osmnx_dist, osmnx_tol)
+        # 選択された network_type を渡して検索
+        with st.spinner(f'交差点検索中... ({network_type})'):
+            nodes, edges, err = get_osmnx_data(target_lm['lat'], target_lm['lon'], osmnx_dist, osmnx_tol, network_type)
             if nodes is not None: st.session_state.current_osmnx_nodes = nodes
         
         if edges is not None:
-            folium.GeoJson(edges, style_function=lambda x: {'color': '#999', 'weight': 2, 'opacity': 0.5}).add_to(m)
+            # walkなら少し色を変えるなどしても良いが、今回はシンプルに同じスタイルで表示
+            edge_color = '#999' if network_type == 'drive' else '#66C'
+            folium.GeoJson(edges, style_function=lambda x: {'color': edge_color, 'weight': 2, 'opacity': 0.5}).add_to(m)
 
         if nodes is not None:
             for _, n in nodes.iterrows():
@@ -483,35 +473,27 @@ def render_map_content(row_index, selected_lm_index, target_lm, row):
         
         shop_name = row.get('name', '店舗')
         folium.Marker(
-            [shop_lat, shop_lon], 
-            tooltip=f"店舗: {shop_name}",
-            popup=shop_name,
+            [shop_lat, shop_lon], tooltip=f"店舗: {shop_name}", popup=shop_name,
             icon=folium.Icon(color="blue", icon="home")
         ).add_to(m)
         
-        # 編集対象
         lm_name = target_lm.get('name', 'ランドマーク')
         folium.Marker(
-            [target_lm['lat'], target_lm['lon']], 
-            tooltip=lm_name, 
-            popup=lm_name,
+            [target_lm['lat'], target_lm['lon']], tooltip=lm_name, popup=lm_name,
             icon=folium.Icon(color="green", icon="flag")
         ).add_to(m)
         
-        # 他のランドマーク（参考表示）
         for i, lm in enumerate(current_list):
             if i != selected_lm_index:
                 folium.Marker(
-                    [lm['lat'], lm['lon']],
-                    tooltip=lm.get('name', '他LM'),
+                    [lm['lat'], lm['lon']], tooltip=lm.get('name', '他LM'),
                     icon=folium.Icon(color="gray", icon="flag")
                 ).add_to(m)
 
         if current_intersection:
             folium.Marker(
                 [current_intersection['intersection_lat'], current_intersection['intersection_lon']], 
-                popup="登録済み交差点",
-                tooltip="登録済み交差点",
+                popup="登録済み交差点", tooltip="登録済み交差点",
                 icon=folium.Icon(color="red")
             ).add_to(m)
             
