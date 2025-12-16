@@ -10,7 +10,7 @@ import os
 
 # --- 定数設定 ---
 RECOVERY_FILE = "recovery_data.csv"
-PAGE_TITLE = "位置情報修正ツール (Final v7)"
+PAGE_TITLE = "位置情報修正ツール (Final v8)"
 
 # ページ設定
 st.set_page_config(layout="wide", page_title=PAGE_TITLE)
@@ -32,6 +32,27 @@ def load_data(file_or_path):
 # --- 自動保存関数 ---
 def auto_save(df):
     df.to_csv(RECOVERY_FILE, index=False)
+
+# --- 座標パース関数 (新規追加) ---
+def parse_lat_lon_string(coord_str):
+    """
+    カンマ区切りの文字列を (lat, lon) のタプルに変換する。
+    失敗した場合は (None, None) を返す。
+    """
+    if not coord_str:
+        return None, None
+    try:
+        # 全角カンマなども考慮して置換
+        coord_str = coord_str.replace('，', ',')
+        parts = coord_str.split(',')
+        if len(parts) != 2:
+            return None, None
+        
+        lat = float(parts[0].strip())
+        lon = float(parts[1].strip())
+        return lat, lon
+    except ValueError:
+        return None, None
 
 # --- OSMnxデータ取得関数 ---
 @st.cache_data(show_spinner=False)
@@ -129,7 +150,7 @@ def main():
     # 保存ボタン
     csv_data = df.to_csv(index=False).encode('utf-8-sig')
     st.sidebar.download_button(
-        "最新CSVをダウンロード", csv_data, "corrected_landmarks_v9.csv", "text/csv", type="primary"
+        "最新CSVをダウンロード", csv_data, "corrected_landmarks_v10.csv", "text/csv", type="primary"
     )
 
     st.sidebar.markdown("---")
@@ -250,32 +271,36 @@ def main():
         shop_lat = row.get('lat', 35.6812) if pd.notna(row.get('lat')) else 35.6812
         shop_lon = row.get('lng', 139.7671) if pd.notna(row.get('lng')) else 139.7671
 
+        # 表示用の初期値文字列を作成
+        default_str = ""
         if st.session_state.get('temp_click'):
-            init_lat = st.session_state.temp_click[0]
-            init_lon = st.session_state.temp_click[1]
-        else:
-            init_lat = None
-            init_lon = None
+            default_str = f"{st.session_state.temp_click[0]:.6f}, {st.session_state.temp_click[1]:.6f}"
 
         with col_act:
             st.subheader("🆕 新規登録フォーム")
-            st.markdown("地図をクリックすると座標が自動入力されます。")
+            st.markdown("地図をクリックするか、座標をカンマ区切りで入力してください。")
             
             new_name = st.text_input("ランドマーク名", value=row.get('name', '店舗前') + " (入口)")
             
-            c_lat, c_lon = st.columns(2)
-            input_lat = c_lat.number_input("緯度 (Lat)", value=init_lat, format="%.6f", placeholder="クリックまたは入力")
-            input_lon = c_lon.number_input("経度 (Lon)", value=init_lon, format="%.6f", placeholder="クリックまたは入力")
+            # 統合された入力欄
+            coord_input = st.text_input(
+                "座標 (Lat, Lon)", 
+                value=default_str, 
+                placeholder="例: 35.6895, 139.6917"
+            )
             
             st.markdown("---")
             if st.button("この情報を登録する", type="primary", use_container_width=True):
-                if input_lat is None or input_lon is None:
-                    st.error("❌ 緯度・経度が入力されていません。地図をクリックするか数値を入力してください。")
+                # 文字列を解析
+                lat_val, lon_val = parse_lat_lon_string(coord_input)
+
+                if lat_val is None or lon_val is None:
+                    st.error("❌ 座標の形式が正しくありません。「35.123, 139.123」のようにカンマ区切りで入力するか、地図をクリックしてください。")
                 else:
                     new_landmark = {
                         'name': new_name,
-                        'lat': input_lat,
-                        'lon': input_lon,
+                        'lat': lat_val,
+                        'lon': lon_val,
                         'nearest_intersection': None 
                     }
                     landmarks.append(new_landmark)
@@ -289,7 +314,6 @@ def main():
         with col_map:
             m = folium.Map(location=[shop_lat, shop_lon], zoom_start=18)
             
-            # 店舗マーカー
             shop_name = row.get('name', '店舗')
             folium.Marker(
                 [shop_lat, shop_lon], 
@@ -389,20 +413,36 @@ def render_map_content(row_index, selected_lm_index, target_lm, row):
 
         else:
             st.markdown("**ランドマーク位置**")
-            d_lat = st.session_state.temp_click[0] if st.session_state.get('temp_click') else target_lm['lat']
-            d_lon = st.session_state.temp_click[1] if st.session_state.get('temp_click') else target_lm['lon']
             
-            new_lat = st.number_input("Lat", value=d_lat, format="%.6f", key="lm_lat_in")
-            new_lon = st.number_input("Lon", value=d_lon, format="%.6f", key="lm_lon_in")
+            # 現在値またはクリック値をデフォルトにする
+            if st.session_state.get('temp_click'):
+                d_lat, d_lon = st.session_state.temp_click
+            else:
+                d_lat, d_lon = target_lm['lat'], target_lm['lon']
+            
+            default_str = f"{d_lat:.6f}, {d_lon:.6f}"
+
+            # 統合された入力欄
+            coord_input_lm = st.text_input(
+                "座標 (Lat, Lon)", 
+                value=default_str,
+                key="lm_coord_input",
+                placeholder="例: 35.6895, 139.6917"
+            )
             
             if st.button("位置を更新", type="primary"):
-                st.session_state.df.iloc[row_index]['landmarks_with_intersections'][selected_lm_index]['lat'] = new_lat
-                st.session_state.df.iloc[row_index]['landmarks_with_intersections'][selected_lm_index]['lon'] = new_lon
-                st.session_state.df.at[row_index, 'review_status'] = 'Modified'
-                auto_save(st.session_state.df)
-                st.session_state.temp_click = None
-                st.success("更新しました！")
-                st.rerun()
+                lat_val, lon_val = parse_lat_lon_string(coord_input_lm)
+                
+                if lat_val is None or lon_val is None:
+                    st.error("❌ 座標の形式が正しくありません。")
+                else:
+                    st.session_state.df.iloc[row_index]['landmarks_with_intersections'][selected_lm_index]['lat'] = lat_val
+                    st.session_state.df.iloc[row_index]['landmarks_with_intersections'][selected_lm_index]['lon'] = lon_val
+                    st.session_state.df.at[row_index, 'review_status'] = 'Modified'
+                    auto_save(st.session_state.df)
+                    st.session_state.temp_click = None
+                    st.success("更新しました！")
+                    st.rerun()
 
         if st.session_state.get('temp_click'):
             if st.button("選択解除", type="secondary"):
@@ -434,7 +474,6 @@ def render_map_content(row_index, selected_lm_index, target_lm, row):
         shop_lat = row.get('lat') if pd.notna(row.get('lat')) else center_lat
         shop_lon = row.get('lng') if pd.notna(row.get('lng')) else center_lon
         
-        # 店舗マーカーにも名前追加
         shop_name = row.get('name', '店舗')
         folium.Marker(
             [shop_lat, shop_lon], 
@@ -443,12 +482,11 @@ def render_map_content(row_index, selected_lm_index, target_lm, row):
             icon=folium.Icon(color="blue", icon="home")
         ).add_to(m)
         
-        # ★★★ 修正箇所: ランドマーク名を表示 ★★★
         lm_name = target_lm.get('name', 'ランドマーク')
         folium.Marker(
             [target_lm['lat'], target_lm['lon']], 
-            tooltip=lm_name, # マウスオーバーで表示
-            popup=lm_name,   # クリックで表示
+            tooltip=lm_name, 
+            popup=lm_name,
             icon=folium.Icon(color="green", icon="flag")
         ).add_to(m)
 
