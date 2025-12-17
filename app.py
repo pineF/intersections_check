@@ -231,9 +231,6 @@ def main():
             st.info("（案内文データなし）")
 
     with col_s:
-        # (以下変更なし)
-
-    with col_s:
         current_status = row.get('review_status', 'Unchecked')
         
         if current_status == 'Confirmed':
