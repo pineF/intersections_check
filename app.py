@@ -214,10 +214,24 @@ def main():
     
     with col_h:
         st.markdown(f"## 🏠 {row.get('name', '名称不明')}")
+
+        # ▼▼▼▼▼ 追加箇所ここから ▼▼▼▼▼
+        # 店舗の座標を取得して、コピー可能な形式で表示
+        shop_lat_disp = row.get('lat')
+        shop_lon_disp = row.get('lng')
+        
+        if pd.notna(shop_lat_disp) and pd.notna(shop_lon_disp):
+            # st.codeを使うと、ホバー時に右上にコピーボタンが出現します
+            st.code(f"{shop_lat_disp}, {shop_lon_disp}", language="text")
+        # ▲▲▲▲▲ 追加箇所ここまで ▲▲▲▲▲
+
         if 'access' in row and pd.notna(row['access']):
             st.markdown(f"#### 🚃 {row['access']}")
         else:
             st.info("（案内文データなし）")
+
+    with col_s:
+        # (以下変更なし)
 
     with col_s:
         current_status = row.get('review_status', 'Unchecked')
