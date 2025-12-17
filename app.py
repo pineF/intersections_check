@@ -7,6 +7,7 @@ import osmnx as ox
 import geopandas as gpd
 import numpy as np
 import os
+from folium.plugins import Geocoder
 
 # --- 定数設定 ---
 RECOVERY_FILE = "recovery_data.csv"
