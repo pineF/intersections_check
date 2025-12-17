@@ -7,9 +7,6 @@ import osmnx as ox
 import geopandas as gpd
 import numpy as np
 import os
-from folium.plugins import Geocoder
-from geopy.geocoders import Nominatim
-from geopy.exc import GeocoderTimedOut
 
 # --- 定数設定 ---
 RECOVERY_FILE = "recovery_data.csv"
@@ -218,16 +215,6 @@ def main():
     with col_h:
         st.markdown(f"## 🏠 {row.get('name', '名称不明')}")
 
-        # ▼▼▼▼▼ 追加箇所ここから ▼▼▼▼▼
-        # 店舗の座標を取得して、コピー可能な形式で表示
-        shop_lat_disp = row.get('lat')
-        shop_lon_disp = row.get('lng')
-        
-        if pd.notna(shop_lat_disp) and pd.notna(shop_lon_disp):
-            # st.codeを使うと、ホバー時に右上にコピーボタンが出現します
-            st.code(f"{shop_lat_disp}, {shop_lon_disp}", language="text")
-        # ▲▲▲▲▲ 追加箇所ここまで ▲▲▲▲▲
-
         if 'access' in row and pd.notna(row['access']):
             st.markdown(f"#### 🚃 {row['access']}")
         else:
@@ -385,41 +372,7 @@ def render_map_content(row_index, selected_lm_index, target_lm, row):
     
     # 操作パネル
     with col2:
-        st.subheader("🛠️ 編集パネル")
-        
-        # ▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼
-        with st.expander("🔍 地名・住所検索 (高精度)", expanded=False):
-            search_query = st.text_input("場所名を入力", placeholder="例: 東京タワー, 〇〇区〇〇 1-2-3")
-            if st.button("検索して移動", key="search_btn"):
-                if search_query:
-                    try:
-                        geolocator = Nominatim(user_agent="my_streamlit_app_v1")
-                        # 日本限定(country_codes='jp') で検索
-                        # viewboxを指定すると、現在のターゲット周辺を優先検索できます
-                        location = geolocator.geocode(
-                            search_query, 
-                            country_codes='jp',
-                            # 現在のターゲット周辺(±1度)を優先検索エリアにする場合
-                            # viewbox=[
-                            #     (target_lm['lat'] - 1, target_lm['lon'] - 1),
-                            #     (target_lm['lat'] + 1, target_lm['lon'] + 1)
-                            # ],
-                            # bounded=False # 範囲外も許可するか
-                        )
-                        
-                        if location:
-                            # 見つかった場所に移動（temp_click扱いにしてマーカーを表示）
-                            st.session_state.temp_click = (location.latitude, location.longitude)
-                            st.success(f"発見: {location.address}")
-                            st.rerun()
-                        else:
-                            st.error("見つかりませんでした。")
-                    except Exception as e:
-                        st.error(f"検索エラー: {e}")
-        
-        st.markdown("---")
-        # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
-        
+        st.subheader("🛠️ 編集パネル")       
         edit_mode = st.radio("編集対象", ["交差点の位置", "ランドマーク自体の位置"], horizontal=True)
         
         st.markdown("---")
