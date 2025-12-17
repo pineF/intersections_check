@@ -455,14 +455,6 @@ def render_map_content(row_index, selected_lm_index, target_lm, row):
 
         m = folium.Map(location=[center_lat, center_lon], zoom_start=18)
 
-        # 追加: OSMライクな検索バー (Geocoder)
-        # collapsed=False にすると最初から入力欄が開いた状態になります
-        Geocoder(
-            collapsed=True,           # Trueなら虫眼鏡アイコンのみ、Falseなら入力欄表示
-            position='topleft',       # 配置場所
-            add_marker=True,          # 検索ヒット時にマーカーを立てるか
-        ).add_to(m)
-
         # 選択された network_type を渡して検索
         with st.spinner(f'交差点検索中... ({network_type})'):
             nodes, edges, err = get_osmnx_data(target_lm['lat'], target_lm['lon'], osmnx_dist, osmnx_tol, network_type)
